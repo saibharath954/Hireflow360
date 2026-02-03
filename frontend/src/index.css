@@ -1,0 +1,223 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 
+  Design System for AI Resume Intake & HR Communication Platform
+  Professional, minimal, accessible design with light/dark mode support
+  All colors in HSL format
+*/
+
+@layer base {
+  :root {
+    /* Background & Surface */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    
+    /* Card & Elevated Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    
+    /* Primary - Professional Indigo */
+    --primary: 226 71% 40%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Secondary */
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    
+    /* Muted */
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    
+    /* Accent */
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
+    
+    /* Destructive / Danger */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    
+    /* Success */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    
+    /* Warning */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    
+    /* Info */
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    
+    /* Border & Input */
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 226 71% 40%;
+    
+    --radius: 0.5rem;
+    
+    /* Sidebar */
+    --sidebar-background: 220 14% 98%;
+    --sidebar-foreground: 220 9% 46%;
+    --sidebar-primary: 226 71% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 226 71% 40%;
+    
+    /* Custom tokens for HR platform */
+    --confidence-high: 142 71% 45%;
+    --confidence-medium: 38 92% 50%;
+    --confidence-low: 0 72% 51%;
+    
+    --message-incoming: 220 14% 96%;
+    --message-outgoing: 226 71% 40%;
+    
+    --status-sent: 142 71% 45%;
+    --status-pending: 38 92% 50%;
+    --status-failed: 0 72% 51%;
+    --status-interested: 142 71% 45%;
+    --status-not-interested: 0 72% 51%;
+    --status-needs-clarification: 38 92% 50%;
+  }
+
+  .dark {
+    /* Background & Surface */
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    
+    /* Card & Elevated Surfaces */
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+    
+    /* Popover */
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+    
+    /* Primary - Professional Indigo (lighter for dark mode) */
+    --primary: 226 70% 60%;
+    --primary-foreground: 222 47% 6%;
+    
+    /* Secondary */
+    --secondary: 222 47% 15%;
+    --secondary-foreground: 210 40% 98%;
+    
+    /* Muted */
+    --muted: 222 47% 15%;
+    --muted-foreground: 215 20% 65%;
+    
+    /* Accent */
+    --accent: 222 47% 15%;
+    --accent-foreground: 210 40% 98%;
+    
+    /* Destructive / Danger */
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 210 40% 98%;
+    
+    /* Success */
+    --success: 142 71% 35%;
+    --success-foreground: 210 40% 98%;
+    
+    /* Warning */
+    --warning: 38 80% 45%;
+    --warning-foreground: 222 47% 6%;
+    
+    /* Info */
+    --info: 199 80% 45%;
+    --info-foreground: 210 40% 98%;
+    
+    /* Border & Input */
+    --border: 222 47% 18%;
+    --input: 222 47% 18%;
+    --ring: 226 70% 60%;
+    
+    /* Sidebar */
+    --sidebar-background: 222 47% 8%;
+    --sidebar-foreground: 215 20% 65%;
+    --sidebar-primary: 226 70% 60%;
+    --sidebar-primary-foreground: 222 47% 6%;
+    --sidebar-accent: 222 47% 12%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 222 47% 18%;
+    --sidebar-ring: 226 70% 60%;
+    
+    /* Custom tokens for HR platform */
+    --confidence-high: 142 71% 35%;
+    --confidence-medium: 38 80% 45%;
+    --confidence-low: 0 62% 40%;
+    
+    --message-incoming: 222 47% 15%;
+    --message-outgoing: 226 70% 50%;
+    
+    --status-sent: 142 71% 35%;
+    --status-pending: 38 80% 45%;
+    --status-failed: 0 62% 40%;
+    --status-interested: 142 71% 35%;
+    --status-not-interested: 0 62% 40%;
+    --status-needs-clarification: 38 80% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  
+  /* Typography scale */
+  h1 {
+    @apply text-3xl font-bold tracking-tight;
+  }
+  
+  h2 {
+    @apply text-2xl font-semibold tracking-tight;
+  }
+  
+  h3 {
+    @apply text-xl font-semibold;
+  }
+  
+  /* Focus styles for accessibility */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+  
+  /* Skip link for accessibility */
+  .skip-link {
+    @apply absolute -top-10 left-0 bg-primary text-primary-foreground px-4 py-2 z-50 focus:top-0 transition-all;
+  }
+}
+
+@layer utilities {
+  /* Loading skeleton animation */
+  .skeleton {
+    @apply animate-pulse bg-muted rounded;
+  }
+  
+  /* Confidence badge colors */
+  .confidence-high {
+    @apply bg-success/10 text-success border-success/20;
+  }
+  
+  .confidence-medium {
+    @apply bg-warning/10 text-warning border-warning/20;
+  }
+  
+  .confidence-low {
+    @apply bg-destructive/10 text-destructive border-destructive/20;
+  }
+}
