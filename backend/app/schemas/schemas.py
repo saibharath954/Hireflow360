@@ -2,7 +2,7 @@
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, EmailStr, Field, validator
 import uuid
 
 # Base schemas
@@ -11,6 +11,17 @@ class BaseSchema(BaseModel):
         from_attributes = True
 
 # User & Auth
+
+class TokenRefresh(BaseModel):
+    refresh_token: str
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+    
 class UserBase(BaseSchema):
     email: str
     name: str
@@ -28,6 +39,13 @@ class UserCreate(BaseSchema):
     password: str
     organization_name: str
     role: str = "RECRUITER"
+
+class UserResponse(BaseSchema):
+    id: uuid.UUID
+    email: str
+    name: str
+    organization_name: str
+    role: str
 
 class UserLogin(BaseSchema):
     email: str

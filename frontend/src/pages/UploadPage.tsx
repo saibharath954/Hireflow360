@@ -16,18 +16,30 @@ export default function UploadPage() {
     setIsUploading(true);
     try {
       if (url) {
-        await uploadResume(url);
-        toast.success("URL submitted", "Resume will be parsed shortly");
-      } else {
-        for (const file of files) {
-          await uploadResume(file);
+        const result = await uploadResume(files[0], url);
+        if (result) {
+          toast.success("URL submitted", "Resume will be parsed shortly");
         }
-        toast.success("Upload complete", `${files.length} resume(s) queued for parsing`);
+      } else {
+        const uploadPromises = files.map(file => uploadResume(file));
+        const results = await Promise.allSettled(uploadPromises);
+        
+        const successfulUploads = results.filter(result => result.status === 'fulfilled').length;
+        
+        if (successfulUploads > 0) {
+          toast.success("Upload complete", `${successfulUploads} resume(s) queued for parsing`);
+        }
+        
+        if (successfulUploads < files.length) {
+          toast.warning("Partial upload", `${files.length - successfulUploads} file(s) failed to upload`);
+        }
       }
-    } catch {
+    } catch (error) {
+      console.error("Upload error:", error);
       toast.error("Upload failed", "Please try again");
+    } finally {
+      setIsUploading(false);
     }
-    setIsUploading(false);
   };
 
   return (

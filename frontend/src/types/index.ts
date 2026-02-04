@@ -1,5 +1,6 @@
 /**
- * Type definitions for the AI Resume Intake & HR Communication Platform
+ * Updated Type Definitions for Backend Integration
+ * Matches FastAPI Pydantic schemas exactly
  */
 
 import type {
@@ -8,11 +9,119 @@ import type {
   ReplyClassification,
   JobStatus,
   JobType,
-  ParsedFieldName,
 } from "@/styles/design-tokens";
 
-// User & Authentication
-export type UserRole = "RECRUITER" | "ADMIN";
+// Use VITE_API_BASE_URL env var or fallback to localhost v1
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1").replace(/\/$/, "");
+
+// API Response Types
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  status?: number;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+// Authentication Types
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in?: number;
+  user: User;
+}
+
+export interface TokenRefreshResponse {
+  access_token: string;
+  refresh_token?: string;
+  token_type: string;
+  expires_in?: number;
+}
+
+export interface LogoutResponse {
+  message: string;
+}
+
+export interface PasswordResetRequest {
+  email: string;
+}
+
+export interface PasswordResetConfirm {
+  token: string;
+  password: string;
+}
+
+export interface PasswordResetResponse {
+  message: string;
+}
+
+export interface RegisterRequest {
+  email: string;
+  password: string;
+  name: string;
+  organization_id?: string;
+  role?: string;
+}
+
+export interface RegisterResponse {
+  id: string;
+  email: string;
+  name: string;
+  organization_id?: string;
+  created_at: string;
+}
+
+export interface ValidateTokenResponse {
+  valid: boolean;
+  user?: User;
+}
+
+// ... (Rest of the file remains unchanged)
+
+// POST /api/v1/auth/login
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+// POST /api/v1/auth/refresh
+export interface RefreshTokenRequest {
+  refresh_token: string;
+}
+
+// POST /api/v1/auth/password-reset-request
+export interface PasswordResetRequestData {
+  email: string;
+}
+
+// POST /api/v1/auth/password-reset-confirm
+export interface PasswordResetConfirmData {
+  token: string;
+  password: string;
+}
+
+// POST /api/v1/auth/register
+export interface RegisterUserRequest {
+  email: string;
+  password: string;
+  name: string;
+  organization_id?: string;
+  role?: string;
+}
+
+// User & Organization
+export type UserRole = "ADMIN" | "RECRUITER";
 
 export interface User {
   id: string;
@@ -30,7 +139,7 @@ export interface Organization {
   logo?: string;
 }
 
-// Conversation State Types (for tracking asked/answered fields)
+// Conversation State
 export type CandidateFieldKey =
   | "name"
   | "email"
@@ -43,7 +152,7 @@ export type CandidateFieldKey =
 
 export interface FieldState {
   value?: string | string[] | number | null;
-  confidence: number; // 0-1
+  confidence: number;
   asked: boolean;
   answered: boolean;
   source?: "resume" | "reply" | "manual";
@@ -53,22 +162,16 @@ export interface ConversationState {
   fields: Record<CandidateFieldKey, FieldState>;
 }
 
-// Parsed Fields & Confidence
+// Parsed Fields
 export interface ParsedField {
-  name: ParsedFieldName;
+  name: string;
   value: string | string[] | number | null;
-  confidence: number; // 0-100
-  rawExtraction?: string; // Original text from extraction
+  confidence: number;
+  rawExtraction?: string;
   source?: "resume" | "reply" | "manual";
 }
 
-export interface ConfidenceScore {
-  field: ParsedFieldName;
-  score: number;
-  isVerified: boolean;
-}
-
-// Resume & Candidate
+// Resume
 export interface Resume {
   id: string;
   candidateId: string;
@@ -81,9 +184,9 @@ export interface Resume {
   rawText?: string;
 }
 
+// Candidate
 export interface Candidate {
   id: string;
-  // Parsed fields
   name: string;
   email: string;
   phone?: string;
@@ -95,21 +198,18 @@ export interface Candidate {
   portfolioUrl?: string;
   noticePeriod?: string;
   expectedSalary?: string;
-  // Metadata
   status: CandidateStatus;
   parsedFields: ParsedField[];
   resumes: Resume[];
   messages: Message[];
   lastMessageAt?: string;
+  overallConfidence: number;
+  conversationState?: ConversationState;
   createdAt: string;
   updatedAt: string;
-  // Confidence scores
-  overallConfidence: number;
-  // Conversation state tracking
-  conversationState?: ConversationState;
 }
 
-// Messaging
+// Message
 export interface Message {
   id: string;
   candidateId: string;
@@ -117,19 +217,15 @@ export interface Message {
   content: string;
   timestamp: string;
   status: MessageStatus;
-  // For outgoing messages
   intent?: string;
   generatedBy?: "ai" | "manual";
-  // For incoming messages
   classification?: ReplyClassification;
   suggestedReply?: string;
   extractedFields?: ParsedField[];
-  // HR Review fields (for questions requiring approval)
   requiresHRReview?: boolean;
   aiSuggestedReply?: string;
   hrApproved?: boolean;
   hrApprovedAt?: string;
-  // Track which fields were asked in outgoing messages
   askedFields?: CandidateFieldKey[];
 }
 
@@ -144,40 +240,25 @@ export interface MessagePreview {
   };
 }
 
-// Background Jobs
+// Job
 export interface Job {
   id: string;
   type: JobType;
   status: JobStatus;
-  progress?: number; // 0-100
+  progress?: number;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
   error?: string;
   metadata?: Record<string, unknown>;
-  // References
   candidateId?: string;
   resumeId?: string;
   messageId?: string;
+  candidateName?: string;
+  candidateEmail?: string;
 }
 
-// API Responses
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
-}
-
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
-}
-
-// Filters & Search
+// Filters
 export interface CandidateFilters {
   search?: string;
   skills?: string[];
@@ -191,31 +272,22 @@ export interface CandidateFilters {
   };
 }
 
-// Export & Sync
+// Export
 export interface ExportOptions {
   format: "xlsx" | "csv";
-  fields?: ParsedFieldName[];
+  fields?: string[];
   includeMessages?: boolean;
   candidateIds?: string[];
 }
 
-export interface GoogleSheetsSyncConfig {
-  sheetId: string;
-  sheetName: string;
-  lastSyncAt?: string;
-  autoSync: boolean;
-  syncInterval?: number; // minutes
-}
-
-// App Settings
+// Settings
 export interface AppSettings {
   mode: "mock" | "automation";
   theme: "light" | "dark" | "system";
-  googleSheetsConfig?: GoogleSheetsSyncConfig;
   defaultIntentTemplates: string[];
 }
 
-// Dashboard Stats
+// Dashboard
 export interface DashboardStats {
   totalCandidates: number;
   resumesProcessed: number;
@@ -232,4 +304,21 @@ export interface ActivityItem {
   timestamp: string;
   candidateId?: string;
   candidateName?: string;
+}
+
+// API Error Types
+export interface ApiError {
+  status: number;
+  message: string;
+  details?: any;
+}
+
+export interface NetworkError {
+  message: string;
+  isNetworkError: boolean;
+}
+
+export interface ReplyCreate {
+  candidate_id: string;
+  content: string;
 }

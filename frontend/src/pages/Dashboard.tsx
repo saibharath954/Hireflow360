@@ -63,13 +63,18 @@ export default function Dashboard() {
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
-      const [statsData, activityData] = await Promise.all([
-        getDashboardStats(),
-        getRecentActivity(),
-      ]);
-      if (statsData) setStats(statsData);
-      setActivity(activityData);
-      setIsLoading(false);
+      try {
+        const [statsData, activityData] = await Promise.all([
+          getDashboardStats(),
+          getRecentActivity(),
+        ]);
+        if (statsData) setStats(statsData);
+        if (activityData) setActivity(activityData);
+      } catch (error) {
+        console.error("Failed to load dashboard data:", error);
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadData();
   }, [getDashboardStats, getRecentActivity]);

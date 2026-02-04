@@ -42,7 +42,7 @@ import { useApi } from "@/hooks/useApi";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useToastContext } from "@/contexts/ToastContext";
 import { exportAndDownload } from "@/services/excelService";
-import type { Candidate, CandidateFilters } from "@/types";
+import type { Candidate, CandidateFilters, PaginatedResponse } from "@/types";
 import type { CandidateStatus } from "@/styles/design-tokens";
 
 const statusOptions: { value: CandidateStatus; label: string }[] = [
@@ -55,6 +55,12 @@ const statusOptions: { value: CandidateStatus; label: string }[] = [
 
 export default function CandidatesList() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    hasMore: false,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatuses, setSelectedStatuses] = useState<CandidateStatus[]>([]);
@@ -62,7 +68,7 @@ export default function CandidatesList() {
   const [isExporting, setIsExporting] = useState(false);
 
   const navigate = useNavigate();
-  const { getCandidates, error } = useApi();
+  const { getCandidates } = useApi();
   const toast = useToastContext();
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -85,10 +91,24 @@ export default function CandidatesList() {
 
   const loadCandidates = useCallback(async () => {
     setIsLoading(true);
-    const data = await getCandidates(filters);
-    setCandidates(data);
-    setIsLoading(false);
-  }, [getCandidates, filters]);
+    try {
+      const data = await getCandidates(filters, pagination.page, pagination.pageSize);
+      if (data) {
+        setCandidates(data.items);
+        setPagination({
+          page: data.page,
+          pageSize: data.pageSize,
+          total: data.total,
+          hasMore: data.hasMore,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load candidates:", error);
+      toast.error("Error", "Failed to load candidates");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [getCandidates, filters, pagination.page, pagination.pageSize, toast]);
 
   useEffect(() => {
     loadCandidates();
@@ -129,10 +149,6 @@ export default function CandidatesList() {
 
   const hasFilters = searchQuery || selectedStatuses.length > 0 || selectedSkills.length > 0;
 
-  if (error) {
-    return <ErrorState message={error} onRetry={loadCandidates} />;
-  }
-
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -140,7 +156,7 @@ export default function CandidatesList() {
         <div>
           <h1 className="text-2xl font-bold">Candidates</h1>
           <p className="text-muted-foreground">
-            {candidates.length} candidate{candidates.length !== 1 ? "s" : ""} in pipeline
+            {pagination.total} candidate{pagination.total !== 1 ? "s" : ""} in pipeline
           </p>
         </div>
         <div className="flex gap-2">

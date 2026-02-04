@@ -1,16 +1,22 @@
 # backend/app/models/models.py
+import uuid
+import enum
+from datetime import datetime, timezone
+
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime, 
-    ForeignKey, JSON, Text, Enum as SQLEnum
+    ForeignKey, JSON, Text, Enum as SQLEnum,
+    UniqueConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-import uuid
+
 from app.core.database import Base
 
-# Enums matching frontend
-import enum
+# ==========================================
+# Enums
+# ==========================================
 
 class UserRole(str, enum.Enum):
     RECRUITER = "RECRUITER"
@@ -46,22 +52,9 @@ class JobType(str, enum.Enum):
     SEND_MESSAGE = "send_message"
     REPROCESS_RESUME = "reprocess_resume"
 
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String, nullable=False)
-    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
-    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.RECRUITER)
-    avatar_url = Column(String, nullable=True)
-    hashed_password = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
-    organization = relationship("Organization", back_populates="users")
-    candidates = relationship("Candidate", back_populates="owner")
+# ==========================================
+# Core Models
+# ==========================================
 
 class Organization(Base):
     __tablename__ = "organizations"
@@ -69,14 +62,74 @@ class Organization(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
     logo = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
-    users = relationship("User", back_populates="organization")
-    candidates = relationship("Candidate", back_populates="organization")
+    # Relationships
+    # Added cascade to prevent orphaned users/candidates if org is deleted
+    users = relationship("User", back_populates="organization", cascade="all, delete-orphan")
+    candidates = relationship("Candidate", back_populates="organization", cascade="all, delete-orphan")
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
+    role = Column(SQLEnum(UserRole, name="user_role_enum"), nullable=False, default=UserRole.RECRUITER)
+    avatar_url = Column(String, nullable=True)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # Relationships
+    organization = relationship("Organization", back_populates="users")
+    candidates = relationship("Candidate", back_populates="owner")
+    audit_logs = relationship("AuditLog", back_populates="user")
+
+# ==========================================
+# Security & Logging
+# ==========================================
+
+class LoginAttempt(Base):
+    __tablename__ = "login_attempts"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), nullable=False, index=True)
+    success = Column(Boolean, nullable=False, default=False)
+    ip_address = Column(String(45))  # Supports IPv6
+    user_agent = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    action = Column(String(100), nullable=False)
+    resource_type = Column(String(50), nullable=False)
+    resource_id = Column(UUID(as_uuid=True), nullable=True)
+    details = Column(JSON, nullable=False, default=dict)
+    ip_address = Column(String(45))
+    user_agent = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relationships
+    user = relationship("User", back_populates="audit_logs")
+
+# ==========================================
+# Candidate & Recruiting
+# ==========================================
 
 class Candidate(Base):
     __tablename__ = "candidates"
-    
+    __table_args__ = (
+        UniqueConstraint("organization_id", "email", name="uq_candidate_org_email"),
+        Index("ix_candidate_org_owner", "organization_id", "owner_id"),
+    )
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -94,16 +147,16 @@ class Candidate(Base):
     expected_salary = Column(String, nullable=True)
     
     # Metadata
-    status = Column(SQLEnum(CandidateStatus), default=CandidateStatus.NEW)
-    overall_confidence = Column(Float, default=0.0)
+    status = Column(SQLEnum(CandidateStatus, name="candidate_status_enum"), default=CandidateStatus.NEW, nullable=False)
+    overall_confidence = Column(Float, default=0.0, nullable=False)
     
     # Conversation state as JSON
     conversation_state = Column(JSON, nullable=True, default=dict)
     
     # Timestamps
     last_message_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
     # Relationships
     organization = relationship("Organization", back_populates="candidates")
@@ -116,14 +169,33 @@ class Candidate(Base):
 
 class CandidateSkill(Base):
     __tablename__ = "candidate_skills"
-    
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "skill", name="uq_candidate_skill"),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     skill = Column(String, nullable=False)
-    confidence = Column(Float, default=1.0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    confidence = Column(Float, default=1.0, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     candidate = relationship("Candidate", back_populates="skills")
+
+class ParsedField(Base):
+    __tablename__ = "parsed_fields"
+    __table_args__ = (
+        Index("ix_parsed_field_candidate_name", "candidate_id", "name"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
+    name = Column(String, nullable=False)  # matches frontend ParsedFieldName
+    value = Column(String, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+    raw_extraction = Column(Text, nullable=True)
+    source = Column(String, nullable=True)  # resume, reply, manual
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    candidate = relationship("Candidate", back_populates="parsed_fields")
 
 class Resume(Base):
     __tablename__ = "resumes"
@@ -133,27 +205,16 @@ class Resume(Base):
     file_name = Column(String, nullable=False)
     file_url = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # pdf, docx, image-pdf
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     parsed_at = Column(DateTime(timezone=True), nullable=True)
     parse_job_id = Column(String, nullable=True)
     raw_text = Column(Text, nullable=True)
     
     candidate = relationship("Candidate", back_populates="resumes")
 
-class ParsedField(Base):
-    __tablename__ = "parsed_fields"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
-    name = Column(String, nullable=False)  # matches frontend ParsedFieldName
-    value = Column(String, nullable=True)
-    confidence = Column(Float, nullable=False)
-    raw_extraction = Column(Text, nullable=True)
-    source = Column(String, nullable=True)  # resume, reply, manual
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
-    candidate = relationship("Candidate", back_populates="parsed_fields")
+# ==========================================
+# Messaging & Jobs
+# ==========================================
 
 class Message(Base):
     __tablename__ = "messages"
@@ -162,8 +223,8 @@ class Message(Base):
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     direction = Column(String, nullable=False)  # incoming, outgoing
     content = Column(Text, nullable=False)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
-    status = Column(SQLEnum(MessageStatus), default=MessageStatus.PENDING)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status = Column(SQLEnum(MessageStatus, name="message_status_enum"), default=MessageStatus.PENDING, nullable=False)
     
     # For outgoing messages
     intent = Column(String, nullable=True)
@@ -171,34 +232,56 @@ class Message(Base):
     asked_fields = Column(JSON, nullable=True)  # List of field keys
     
     # For incoming messages
-    classification = Column(SQLEnum(ReplyClassification), nullable=True)
+    classification = Column(SQLEnum(ReplyClassification, name="reply_classification_enum"), nullable=True)
     suggested_reply = Column(Text, nullable=True)
     extracted_fields = Column(JSON, nullable=True)
     
     # HR Review fields
-    requires_hr_review = Column(Boolean, default=False)
+    requires_hr_review = Column(Boolean, default=False, nullable=False)
     ai_suggested_reply = Column(Text, nullable=True)
-    hr_approved = Column(Boolean, default=False)
+    hr_approved = Column(Boolean, default=False, nullable=False)
     hr_approved_at = Column(DateTime(timezone=True), nullable=True)
     
     candidate = relationship("Candidate", back_populates="messages")
 
 class Job(Base):
     __tablename__ = "jobs"
-    
+    __table_args__ = (
+        Index("ix_job_status_type", "status", "type"),
+    )
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    type = Column(SQLEnum(JobType), nullable=False)
-    status = Column(SQLEnum(JobStatus), default=JobStatus.QUEUED)
-    progress = Column(Integer, nullable=True)  # 0-100
+
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
+
+    type = Column(SQLEnum(JobType, name="job_type_enum"), nullable=False)
+    status = Column(
+        SQLEnum(JobStatus, name="job_status_enum"),
+        default=JobStatus.QUEUED,
+        nullable=False,
+    )
+
+    progress = Column(Integer)
+    attempts = Column(Integer, default=0)
+    max_attempts = Column(Integer, default=3)
+
+    locked_at = Column(DateTime(timezone=True))
+    locked_by = Column(String)
+
+    error = Column(Text)
+    job_metadata = Column(JSON)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    error = Column(Text, nullable=True)
-    job_metadata = Column(JSON, nullable=True)
-    
-    # References
-    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=True)
-    resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), nullable=True)
-    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id"), nullable=True)
-    
-    candidate = relationship("Candidate", back_populates="jobs")
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+
+    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"))
+    resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"))
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id"))
+
+    candidate = relationship("Candidate")

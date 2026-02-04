@@ -14,13 +14,22 @@ class Settings(BaseSettings):
 
 
     # API
-    API_V1_STR: str = "/api"
+    API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "AI Resume Intake & HR Platform"
     
     # Security
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    REFRESH_SECRET_KEY: str
+    FERNET_KEY: Optional[str] = None
+
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    MAX_LOGIN_ATTEMPTS: int = 5
+    ACCOUNT_LOCK_WINDOW_MINUTES: int = 15
+    ACCOUNT_LOCK_DURATION_MINUTES: int = 15
+    
     
     # Database
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/hr_platform"
