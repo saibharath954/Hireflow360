@@ -20,8 +20,8 @@ interface JobsContextType {
 const JobsContext = createContext<JobsContextType | undefined>(undefined);
 
 // Polling interval in milliseconds
-const POLL_INTERVAL = 10000; // 10 seconds
-const ACTIVE_JOB_POLL_INTERVAL = 5000; // 5 seconds for active jobs
+// const POLL_INTERVAL = 10000; // 10 seconds
+// const ACTIVE_JOB_POLL_INTERVAL = 5000; // 5 seconds for active jobs
 
 export function JobsProvider({ children }: { children: React.ReactNode }) {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -88,14 +88,7 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
   // Poll for job updates
   useEffect(() => {
     refreshJobs();
-    
-    const interval = setInterval(
-      refreshJobs,
-      hasActiveJobs ? ACTIVE_JOB_POLL_INTERVAL : POLL_INTERVAL
-    );
-    
-    return () => clearInterval(interval);
-  }, [refreshJobs, hasActiveJobs]);
+  }, []);
 
   const pendingCount = jobs.filter(
     (j) => j.status === "queued" || j.status === "processing"

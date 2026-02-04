@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, and_, func, desc
+from sqlalchemy import asc, or_, and_, func, desc
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.models import (
@@ -151,7 +151,9 @@ class CandidateService:
         filters: Optional[CandidateFilters] = None,
         page: int = 1,
         page_size: int = 50,
-        owner_id: Optional[uuid.UUID] = None
+        owner_id: Optional[uuid.UUID] = None,
+        sort_by: str = "updated_at",   
+        sort_order: str = "desc"
     ) -> PaginatedResponse:
         """
         Get paginated list of candidates with filtering.
@@ -179,7 +181,18 @@ class CandidateService:
             # Apply filters
             if filters:
                 query = CandidateService._apply_filters(query, filters)
-            
+
+            # --- ADD SORTING LOGIC HERE ---
+            if sort_by:
+                sort_attr = getattr(Candidate, sort_by, Candidate.updated_at)
+                if sort_order == "desc":
+                    query = query.order_by(desc(sort_attr))
+                else:
+                    query = query.order_by(asc(sort_attr))
+            else:
+                # Default sort
+                query = query.order_by(desc(Candidate.updated_at))
+                
             # Get total count
             total = query.count()
             

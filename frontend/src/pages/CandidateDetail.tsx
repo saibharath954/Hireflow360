@@ -3,7 +3,8 @@
  * Shows parsed fields, messaging composer, and conversation
  */
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft, Send, Eye, EyeOff, RefreshCw, MessageSquare, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ export default function CandidateDetail() {
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false); // ADD THIS
   const [showRawExtraction, setShowRawExtraction] = useState(false);
   const [intent, setIntent] = useState("");
   const [preview, setPreview] = useState("");
@@ -44,6 +46,10 @@ export default function CandidateDetail() {
   const { getCandidate, generateMessagePreview, sendMessage, simulateReply, approveAndSendMessage, reprocessResume, getConversation } = useApi();
   const { settings } = useApiContext();
   const toast = useToastContext();
+
+  // Use refs to track state without causing re-renders
+  const hasLoadedRef = useRef(false);
+  const conversationFetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Derive conversation state from candidate data
   const conversationState = useMemo(() => {
@@ -68,8 +74,11 @@ export default function CandidateDetail() {
     );
   }, [messages]);
 
+  // FIXED: loadCandidate with proper dependencies
   const loadCandidate = useCallback(async () => {
-    if (!id) return;
+    if (!id || isFetching || hasLoadedRef.current) return;
+    
+    setIsFetching(true);
     setIsLoading(true);
     try {
       const [candidateData, conversationData] = await Promise.all([
@@ -84,17 +93,52 @@ export default function CandidateDetail() {
       if (conversationData) {
         setMessages(conversationData);
       }
+      
+      hasLoadedRef.current = true; // Mark as loaded
     } catch (error) {
       console.error("Failed to load candidate:", error);
       toast.error("Error", "Failed to load candidate data");
+      hasLoadedRef.current = false; // Reset on error
     } finally {
       setIsLoading(false);
+      setIsFetching(false);
     }
-  }, [id, getCandidate, getConversation, toast]);
+  }, [id, isFetching, getCandidate, getConversation]); // Only depend on id and isFetching
 
+  // Effect 1: Reset the ref ONLY when the ID actually changes
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [id]);
+
+  // Effect 2: Trigger the fetch when dependencies change
   useEffect(() => {
     loadCandidate();
   }, [loadCandidate]);
+
+  // Safe refresh function with debouncing
+  const refreshConversation = useCallback(async () => {
+    if (!id || isFetching) return;
+    
+    // Clear any pending timeout
+    if (conversationFetchTimeoutRef.current) {
+      clearTimeout(conversationFetchTimeoutRef.current);
+    }
+    
+    // Debounce: wait 500ms before actually fetching
+    conversationFetchTimeoutRef.current = setTimeout(async () => {
+      setIsFetching(true);
+      try {
+        const updatedMessages = await getConversation(id, 50);
+        if (updatedMessages) {
+          setMessages(updatedMessages);
+        }
+      } catch (error) {
+        console.error("Failed to refresh conversation:", error);
+      } finally {
+        setIsFetching(false);
+      }
+    }, 500);
+  }, [id, isFetching]);
 
   const handleGeneratePreview = async () => {
     if (!id || !intent.trim()) return;
@@ -124,11 +168,8 @@ export default function CandidateDetail() {
         setIntent("");
         setPreview("");
         setPreviewAskedFields([]);
-        // Refresh conversation
-        const updatedMessages = await getConversation(id, 50);
-        if (updatedMessages) {
-          setMessages(updatedMessages);
-        }
+        // Refresh conversation after sending
+        refreshConversation();
       }
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -150,11 +191,8 @@ export default function CandidateDetail() {
           toast.success("Reply simulated", `Classified as: ${result.classification}`);
         }
         setMockReply("");
-        // Refresh conversation
-        const updatedMessages = await getConversation(id, 50);
-        if (updatedMessages) {
-          setMessages(updatedMessages);
-        }
+        // Refresh conversation after reply
+        refreshConversation();
       }
     } catch (error) {
       console.error("Failed to simulate reply:", error);
@@ -171,11 +209,8 @@ export default function CandidateDetail() {
       const result = await approveAndSendMessage(messageId, content);
       if (result) {
         toast.success("Message approved and sent", "Your response has been sent to the candidate.");
-        // Refresh conversation
-        const updatedMessages = await getConversation(id, 50);
-        if (updatedMessages) {
-          setMessages(updatedMessages);
-        }
+        // Refresh conversation after approval
+        refreshConversation();
       }
     } catch (error) {
       console.error("Failed to approve message:", error);
@@ -204,6 +239,15 @@ export default function CandidateDetail() {
       setIsReprocessing(false);
     }
   };
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (conversationFetchTimeoutRef.current) {
+        clearTimeout(conversationFetchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64"><LoadingSpinner size="lg" /></div>;
@@ -392,18 +436,28 @@ export default function CandidateDetail() {
                 <p className="text-muted-foreground text-center py-4">No messages yet</p>
               ) : (
                 <div className="space-y-4 max-h-80 overflow-y-auto">
-                  {messages.map((msg) => (
-                    <MessageBubble 
-                      key={msg.id} 
-                      content={msg.content} 
-                      direction={msg.direction} 
-                      timestamp={msg.timestamp} 
-                      status={msg.status} 
-                      classification={msg.classification} 
-                      suggestedReply={msg.direction === "incoming" && !msg.requiresHRReview ? msg.suggestedReply : undefined}
-                      requiresHRReview={msg.requiresHRReview}
-                    />
-                  ))}
+                  {[...messages]
+                    .sort(
+                      (a, b) =>
+                        new Date(a.timestamp).getTime() -
+                        new Date(b.timestamp).getTime()
+                    )
+                    .map((msg) => (
+                      <MessageBubble
+                        key={msg.id}
+                        content={msg.content}
+                        direction={msg.direction}
+                        timestamp={msg.timestamp}
+                        status={msg.status}
+                        classification={msg.classification}
+                        suggestedReply={
+                          msg.direction === "incoming" && !msg.requiresHRReview
+                            ? msg.suggestedReply
+                            : undefined
+                        }
+                        requiresHRReview={msg.requiresHRReview}
+                      />
+                    ))}
                 </div>
               )}
             </CardContent>

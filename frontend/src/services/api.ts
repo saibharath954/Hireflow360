@@ -85,11 +85,11 @@ const retryRequest = async <T>(
 // Request wrapper
 const apiRequest = async <T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit & { retries?: number } = {}
 ): Promise<ApiResponse<T>> => {
   const url = `${API_BASE_URL}${endpoint}`;
   const token = authService.getToken();
-
+  const retries = options.retries ?? API_CONFIG.retries;
   const headers: HeadersInit = {
     "Content-Type": "application/json",
     ...options.headers,
@@ -131,9 +131,13 @@ const apiRequest = async <T>(
   try {
     return await retryRequest(
     requestFn,
-    API_CONFIG.retries,
+    retries,
     API_CONFIG.retryDelay,
-    (error) => error.message !== "UNAUTHORIZED"
+    (error: any) => {
+      const status = error?.status || error?.response?.status;
+      // Retry ONLY on network errors or 5xx
+      return !status || status >= 500;
+    }
 );
 
   } catch (error) {
@@ -166,11 +170,11 @@ const handleResponse = async <T>(response: Response): Promise<ApiResponse<T>> =>
   const data = await response.json();
   
   if (!response.ok) {
-    return {
-      success: false,
-      error: data.detail || data.error || `HTTP ${response.status}`,
-      message: data.message,
-    };
+    const error: any = new Error(
+      data.detail || data.error || `HTTP ${response.status}`
+    );
+    error.status = response.status;
+    throw error;
   }
 
   return {
@@ -187,26 +191,53 @@ const uploadFile = async (
   additionalData: Record<string, string> = {}
 ): Promise<ApiResponse<any>> => {
   const url = `${API_BASE_URL}${endpoint}`;
-  const token = authService.getToken();
+  // 1. Get initial token
+  let token = authService.getToken();
+  
+  // 2. Prepare FormData (Re-creatable function if needed, but File object is reusable)
   const formData = new FormData();
-  
   formData.append("file", file);
-  
   Object.entries(additionalData).forEach(([key, value]) => {
     formData.append(key, value);
   });
 
-  const headers: HeadersInit = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  // Helper to build headers
+  const getHeaders = (currentToken: string | null): HeadersInit => {
+    const headers: Record<string, string> = {};
+    if (currentToken) {
+      headers["Authorization"] = `Bearer ${currentToken}`;
+    }
+    return headers;
+  };
 
   try {
-    const response = await fetchWithTimeout(url, {
+    // 3. First Attempt
+    let response = await fetchWithTimeout(url, {
       method: "POST",
-      headers,
+      headers: getHeaders(token),
       body: formData,
     });
+
+    // 4. Handle 401 Unauthorized (Token Expired)
+    if (response.status === 401) {
+      console.warn("Upload failed with 401. Attempting token refresh...");
+      
+      // Attempt refresh
+      const refreshed = await authService.refreshToken();
+      
+      if (!refreshed) {
+        authService.clear();
+        throw new Error("Session expired. Please login again.");
+      }
+
+      // 5. Retry with NEW token
+      token = authService.getToken();
+      response = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: getHeaders(token),
+        body: formData,
+      });
+    }
 
     return await handleResponse(response);
   } catch (error) {
@@ -303,7 +334,7 @@ export const candidatesApi = {
       params.append("dateTo", filters.dateRange.to);
     }
 
-    return apiRequest<PaginatedResponse<Candidate>>(`/candidates?${params.toString()}`);
+    return apiRequest<PaginatedResponse<Candidate>>(`/candidates?${params.toString()}`,{retries:0});
   },
 
   getById: async (id: string): Promise<ApiResponse<Candidate>> => {
@@ -370,6 +401,7 @@ export const messagingApi = {
     candidateId: string,
     pendingFields?: string[]
   ): Promise<ApiResponse<MessagePreview>> => {
+
     const params = new URLSearchParams({
       intent,
       candidate_id: candidateId,
@@ -379,7 +411,10 @@ export const messagingApi = {
       params.append("pending_fields", pendingFields.join(","));
     }
 
-    return apiRequest<MessagePreview>(`/messaging/generate-preview?${params.toString()}`);
+    return apiRequest<MessagePreview>(
+      `/messaging/generate-preview?${params.toString()}`,
+      { method: "POST" }
+    );
   },
 
   send: async (
@@ -388,15 +423,22 @@ export const messagingApi = {
     mode: "mock" | "automation" = "mock",
     askedFields?: string[]
   ): Promise<ApiResponse<Message>> => {
-    return apiRequest<Message>("/messaging/send", {
-      method: "POST",
-      body: JSON.stringify({
-        candidate_id: candidateId,
-        content,
-        mode,
-        asked_fields: askedFields,
-      }),
+
+    const params = new URLSearchParams({
+      candidate_id: candidateId,
+      mode,
     });
+
+    return apiRequest<Message>(
+      `/messaging/send?${params.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content,
+          asked_fields: askedFields ?? [],
+        }),
+      }
+    );
   },
 
   receiveReply: async (candidateId: string, content: string): Promise<ApiResponse<Message>> => {

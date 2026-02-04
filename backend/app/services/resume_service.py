@@ -1,20 +1,23 @@
 # backend/app/services/resume_service.py
 """
-Resume Service
-Handles all business logic related to resume processing.
+Enhanced Resume Service with OCR and AI parsing
 """
 
 import os
 import uuid
 import shutil
+import tempfile
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, BinaryIO
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 import pdf2image
 from PIL import Image
 import pytesseract
 from docx import Document
+import PyPDF2
+import requests
+from io import BytesIO
 
 from app.models.models import (
     Resume, Candidate, CandidateSkill, ParsedField,
@@ -22,58 +25,72 @@ from app.models.models import (
 )
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.ai_service import AIService
 from app.workers.background import process_resume_upload
 
 
 class ResumeService:
-    """Service for resume-related operations"""
+    """Production-grade resume processing service"""
+    
+    SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'}
+    OCR_LANGUAGES = ['eng', 'fra', 'deu', 'spa', 'ita']  # Supported OCR languages
     
     @staticmethod
-    def upload_resume(
-        organization_id: uuid.UUID,
-        user_id: uuid.UUID,
-        db: Session,
+    def process_resume_upload(
+        file_content: Optional[bytes] = None,
         file_path: Optional[str] = None,
         file_url: Optional[str] = None,
-        file_name: str = "resume.pdf",
+        organization_id: uuid.UUID = None,
+        user_id: uuid.UUID = None,
+        db: Session = None
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        Process resume upload from file or URL.
-        
-        Args:
-            db: Database session
-            file_path: Path to uploaded file (optional)
-            file_url: URL to resume (optional)
-            file_name: Original filename
-            organization_id: Organization ID
-            user_id: User ID who uploaded
-            
-        Returns:
-            Tuple of (response_data, error_message)
+        Process resume upload from various sources
         """
         try:
-            # Validate input
-            if not file_path and not file_url:
-                return None, "Either file_path or file_url must be provided"
+            # Determine source and get file
+            if file_content:
+                file_obj = BytesIO(file_content)
+                file_name = f"resume_{uuid.uuid4()}.pdf"
+                file_type = ResumeService._detect_file_type(file_content)
+                
+            elif file_path and os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    file_content = f.read()
+                file_obj = BytesIO(file_content)
+                file_name = os.path.basename(file_path)
+                file_type = ResumeService._detect_file_type(file_content)
+                
+            elif file_url:
+                # Download from URL
+                response = requests.get(file_url, timeout=30)
+                if response.status_code != 200:
+                    return None, f"Failed to download from URL: {response.status_code}"
+                
+                file_content = response.content
+                file_obj = BytesIO(file_content)
+                file_name = file_url.split('/')[-1] or f"resume_{uuid.uuid4()}.pdf"
+                file_type = ResumeService._detect_file_type(file_content)
+                
+            else:
+                return None, "No valid file source provided"
+            
+            # Validate file
+            if not file_type:
+                return None, "Unsupported file type"
             
             # Generate IDs
             resume_id = uuid.uuid4()
             candidate_id = uuid.uuid4()
             job_id = uuid.uuid4()
             
-            # Determine file type
-            if file_path:
-                file_ext = os.path.splitext(file_path)[1].lower()
-                storage_path = file_path
-            else:
-                file_ext = os.path.splitext(file_name)[1].lower()
-                storage_path = file_url
+            # Save file to storage
+            storage_path = ResumeService._save_to_storage(
+                file_content, resume_id, file_name, file_type
+            )
             
-            # Validate file type
-            if file_ext not in ['.pdf', '.docx', '.doc']:
-                return None, f"Unsupported file type: {file_ext}"
-            
-            file_type = "pdf" if file_ext == '.pdf' else 'docx'
+            if not storage_path:
+                return None, "Failed to save file"
             
             # Create resume record
             resume = Resume(
@@ -101,6 +118,7 @@ class ResumeService:
             # Create parsing job
             job = Job(
                 id=job_id,
+                organization_id=organization_id,
                 type=JobType.PARSE_RESUME,
                 status=JobStatus.QUEUED,
                 candidate_id=candidate_id,
@@ -108,7 +126,8 @@ class ResumeService:
                 metadata={
                     "file_name": file_name,
                     "file_type": file_type,
-                    "uploaded_by": str(user_id)
+                    "uploaded_by": str(user_id),
+                    "file_size": len(file_content)
                 },
                 created_at=datetime.utcnow()
             )
@@ -118,17 +137,6 @@ class ResumeService:
             db.add(resume)
             db.add(job)
             db.commit()
-            
-            # Copy file to uploads directory if it's a local file
-            if file_path and os.path.exists(file_path):
-                uploads_dir = os.path.join(settings.UPLOAD_DIR, str(resume_id))
-                os.makedirs(uploads_dir, exist_ok=True)
-                dest_path = os.path.join(uploads_dir, file_name)
-                shutil.copy2(file_path, dest_path)
-                
-                # Update resume with local URL
-                resume.file_url = f"/uploads/{resume_id}/{file_name}"
-                db.commit()
             
             # Trigger background processing
             process_resume_upload.delay(
@@ -140,93 +148,30 @@ class ResumeService:
             response_data = {
                 "resumeId": str(resume_id),
                 "candidateId": str(candidate_id),
-                "jobId": str(job_id)
+                "jobId": str(job_id),
+                "fileName": file_name,
+                "fileType": file_type,
+                "fileSize": len(file_content)
             }
             
-            logger.info(f"Resume uploaded: {file_name}, Job: {job_id}")
+            logger.info(f"Resume uploaded: {file_name}, Size: {len(file_content)} bytes")
             return response_data, None
             
         except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to upload resume: {str(e)}")
+            if db:
+                db.rollback()
+            logger.error(f"Failed to process resume upload: {str(e)}")
             return None, str(e)
     
     @staticmethod
-    def reprocess_resume(
-        db: Session,
-        resume_id: uuid.UUID,
-        organization_id: uuid.UUID
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """
-        Reprocess an existing resume.
-        
-        Args:
-            db: Database session
-            resume_id: Resume ID
-            organization_id: Organization ID
-            
-        Returns:
-            Tuple of (response_data, error_message)
-        """
-        try:
-            # Get resume with candidate check
-            resume = db.query(Resume).join(Candidate).filter(
-                Resume.id == resume_id,
-                Candidate.organization_id == organization_id
-            ).first()
-            
-            if not resume:
-                return None, "Resume not found"
-            
-            # Create new job
-            job_id = uuid.uuid4()
-            job = Job(
-                id=job_id,
-                type=JobType.REPROCESS_RESUME,
-                status=JobStatus.QUEUED,
-                candidate_id=resume.candidate_id,
-                resume_id=resume_id,
-                created_at=datetime.utcnow()
-            )
-            
-            db.add(job)
-            db.commit()
-            
-            # Trigger reprocessing
-            process_resume_upload.delay(
-                resume_id=str(resume_id),
-                candidate_id=str(resume.candidate_id),
-                job_id=str(job_id),
-                reprocess=True
-            )
-            
-            response_data = {"jobId": str(job_id)}
-            logger.info(f"Resume reprocessing triggered: {resume_id}, Job: {job_id}")
-            return response_data, None
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to reprocess resume: {str(e)}")
-            return None, str(e)
-    
-    @staticmethod
-    def parse_resume_file(
+    def parse_resume_content(
         resume_id: uuid.UUID,
         candidate_id: uuid.UUID,
         job_id: uuid.UUID,
         reprocess: bool = False
     ) -> bool:
         """
-        Parse resume file (OCR, text extraction, parsing).
-        
-        Args:
-            resume_id: Resume ID
-            candidate_id: Candidate ID
-            job_id: Job ID
-            reprocess: Whether this is a reprocessing
-            
-        Returns:
-            Success status
+        Parse resume content with OCR and AI
         """
         from app.core.database import SessionLocal
         db = SessionLocal()
@@ -247,32 +192,55 @@ class ResumeService:
             job.progress = 10
             db.commit()
             
-            # Extract text from resume
-            raw_text = ResumeService._extract_text_from_resume(resume)
+            # Extract text based on file type
+            raw_text = ResumeService._extract_text_from_file(resume)
             
-            # Parse text using AI/ML (mock implementation)
-            parsed_data = ResumeService._parse_resume_text(raw_text, resume.file_name)
+            if not raw_text or len(raw_text.strip()) < 50:
+                logger.error(f"Failed to extract sufficient text from resume {resume_id}")
+                job.status = JobStatus.FAILED
+                job.error = "Failed to extract text from resume"
+                job.completed_at = datetime.utcnow()
+                db.commit()
+                return False
             
             # Update job progress
-            job.progress = 50
+            job.progress = 30
+            db.commit()
+            
+            # Parse text using AI
+            parsed_data = AIService.parse_resume_with_llm(raw_text)
+            
+            # Update job progress
+            job.progress = 70
             db.commit()
             
             # Update candidate with parsed data
-            ResumeService._update_candidate_from_parsed_data(
+            ResumeService._update_candidate_with_parsed_data(
                 db, candidate, parsed_data, resume, reprocess
             )
             
             # Update resume
-            resume.raw_text = raw_text[:5000]  # Store first 5000 chars
+            resume.raw_text = raw_text[:10000]  # Store first 10k chars
             resume.parsed_at = datetime.utcnow()
             
             # Complete job
             job.status = JobStatus.COMPLETED
             job.progress = 100
             job.completed_at = datetime.utcnow()
+            job.metadata = {
+                **job.metadata,
+                "text_length": len(raw_text),
+                "parsed_fields": len(parsed_data),
+                "confidence_avg": sum(
+                    parsed_data.get('confidence_scores', {}).values()
+                ) / len(parsed_data.get('confidence_scores', {})) if parsed_data.get('confidence_scores') else 0
+            }
             
             db.commit()
-            logger.info(f"Resume parsed successfully: {resume.file_name}")
+            
+            logger.info(f"Resume parsed successfully: {resume.file_name}, "
+                       f"Text length: {len(raw_text)}, "
+                       f"Parsed fields: {len(parsed_data)}")
             return True
             
         except Exception as e:
@@ -289,281 +257,399 @@ class ResumeService:
             db.close()
     
     @staticmethod
-    def get_resume_by_id(
+    def batch_process_resumes(
         db: Session,
-        resume_id: uuid.UUID,
-        organization_id: uuid.UUID
-    ) -> Optional[Resume]:
+        organization_id: uuid.UUID,
+        file_paths: List[str],
+        user_id: uuid.UUID
+    ) -> Dict[str, Any]:
         """
-        Get resume by ID with security check.
+        Process multiple resumes in batch
+        """
+        results = {
+            "success": 0,
+            "failed": 0,
+            "total": len(file_paths),
+            "details": []
+        }
         
-        Args:
-            db: Database session
-            resume_id: Resume ID
-            organization_id: Organization ID
-            
-        Returns:
-            Resume object or None
-        """
-        try:
-            resume = db.query(Resume).join(Candidate).filter(
-                Resume.id == resume_id,
-                Candidate.organization_id == organization_id
-            ).first()
-            
-            return resume
-            
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to get resume {resume_id}: {str(e)}")
-            raise
-    
-    @staticmethod
-    def get_resumes_by_candidate(
-        db: Session,
-        candidate_id: uuid.UUID,
-        organization_id: uuid.UUID
-    ) -> List[Resume]:
-        """
-        Get all resumes for a candidate.
+        for file_path in file_paths:
+            try:
+                result, error = ResumeService.process_resume_upload(
+                    file_path=file_path,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    db=db
+                )
+                
+                if result:
+                    results["success"] += 1
+                    results["details"].append({
+                        "file": os.path.basename(file_path),
+                        "status": "success",
+                        "resumeId": result["resumeId"],
+                        "candidateId": result["candidateId"]
+                    })
+                else:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "file": os.path.basename(file_path),
+                        "status": "failed",
+                        "error": error
+                    })
+                    
+            except Exception as e:
+                results["failed"] += 1
+                results["details"].append({
+                    "file": os.path.basename(file_path),
+                    "status": "failed",
+                    "error": str(e)
+                })
         
-        Args:
-            db: Database session
-            candidate_id: Candidate ID
-            organization_id: Organization ID
-            
-        Returns:
-            List of resumes
-        """
-        try:
-            resumes = db.query(Resume).join(Candidate).filter(
-                Resume.candidate_id == candidate_id,
-                Candidate.organization_id == organization_id
-            ).all()
-            
-            return resumes
-            
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to get resumes for candidate {candidate_id}: {str(e)}")
-            raise
+        return results
     
     @staticmethod
-    def delete_resume(
-        db: Session,
-        resume_id: uuid.UUID,
-        organization_id: uuid.UUID
-    ) -> bool:
+    def validate_resume_file(file_content: bytes, file_name: str) -> Tuple[bool, Optional[str]]:
         """
-        Delete a resume.
+        Validate resume file before processing
+        """
+        # Check file size (max 10MB)
+        if len(file_content) > 10 * 1024 * 1024:
+            return False, "File size exceeds 10MB limit"
         
-        Args:
-            db: Database session
-            resume_id: Resume ID
-            organization_id: Organization ID
-            
-        Returns:
-            True if deleted, False if not found
-        """
+        # Check file type
+        file_type = ResumeService._detect_file_type(file_content)
+        if not file_type:
+            return False, "Unsupported file type"
+        
+        # Check for malicious content
+        if ResumeService._contains_malicious_content(file_content):
+            return False, "File contains potentially malicious content"
+        
+        # Check if it's a valid document
         try:
-            resume = db.query(Resume).join(Candidate).filter(
-                Resume.id == resume_id,
-                Candidate.organization_id == organization_id
-            ).first()
-            
-            if not resume:
-                return False
-            
-            # Delete file from storage
-            if resume.file_url and resume.file_url.startswith("/uploads/"):
-                file_path = os.path.join(settings.UPLOAD_DIR, resume.file_url.replace("/uploads/", "", 1))
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            
-            # Delete resume record
-            db.delete(resume)
-            db.commit()
-            
-            logger.info(f"Deleted resume: {resume.file_name}")
-            return True
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to delete resume {resume_id}: {str(e)}")
-            return False
-    
-    # Helper Methods
+            if file_type == 'pdf':
+                # Try to read PDF
+                pdf_reader = PyPDF2.PdfReader(BytesIO(file_content))
+                if len(pdf_reader.pages) == 0:
+                    return False, "Invalid PDF file"
+                
+            elif file_type == 'docx':
+                # Try to read DOCX
+                doc = Document(BytesIO(file_content))
+                if len(doc.paragraphs) == 0:
+                    return False, "Invalid DOCX file"
+                    
+        except Exception:
+            return False, "Corrupted or invalid file"
+        
+        return True, None
     
     @staticmethod
-    def _extract_name_from_filename(filename: str) -> str:
-        """Extract candidate name from filename."""
-        name = filename.replace('.pdf', '').replace('.docx', '').replace('.doc', '')
-        name = name.replace('_', ' ').replace('-', ' ')
-        name = ' '.join(word.capitalize() for word in name.split())
-        return name
+    def _detect_file_type(file_content: bytes) -> Optional[str]:
+        """Detect file type from content"""
+        # Check magic numbers
+        if file_content.startswith(b'%PDF'):
+            return 'pdf'
+        elif file_content.startswith(b'PK'):  # ZIP archive (DOCX is a ZIP)
+            # Check for DOCX structure
+            try:
+                import zipfile
+                with zipfile.ZipFile(BytesIO(file_content)) as zf:
+                    if '[Content_Types].xml' in zf.namelist():
+                        return 'docx'
+            except:
+                pass
+        elif file_content.startswith(b'\xFF\xD8\xFF'):  # JPEG
+            return 'jpg'
+        elif file_content.startswith(b'\x89PNG\r\n\x1A\n'):  # PNG
+            return 'png'
+        elif b'{\\rtf1' in file_content[:100]:  # RTF
+            return 'rtf'
+        elif b'<!DOCTYPE html' in file_content[:100].lower():
+            return 'html'
+        
+        # Fallback: check extension if filename is known
+        return None
     
     @staticmethod
-    def _extract_text_from_resume(resume: Resume) -> str:
-        """Extract text from resume file."""
+    def _extract_text_from_file(resume: Resume) -> str:
+        """Extract text from resume file with OCR support"""
         try:
+            file_path = None
+            
+            # Get file content
+            if resume.file_url.startswith('http'):
+                # Download from URL
+                response = requests.get(resume.file_url, timeout=30)
+                if response.status_code != 200:
+                    return f"Failed to download: {response.status_code}"
+                file_content = response.content
+            else:
+                # Read from local storage
+                file_path = os.path.join(
+                    settings.UPLOAD_DIR, 
+                    resume.file_url.replace("/uploads/", "", 1)
+                )
+                if not os.path.exists(file_path):
+                    return "File not found"
+                
+                with open(file_path, 'rb') as f:
+                    file_content = f.read()
+            
+            # Extract text based on file type
             if resume.file_type == 'pdf':
-                # Check if it's an image PDF
-                if resume.file_url.startswith('http'):
-                    # URL - can't process locally
-                    return f"PDF from URL: {resume.file_url}"
-                
-                file_path = os.path.join(settings.UPLOAD_DIR, resume.file_url.replace("/uploads/", "", 1))
-                
                 # Try text extraction first
-                try:
-                    import PyPDF2
-                    with open(file_path, 'rb') as file:
-                        pdf_reader = PyPDF2.PdfReader(file)
-                        text = ""
-                        for page in pdf_reader.pages:
-                            text += page.extract_text()
-                        
-                        if text.strip():  # If text extraction worked
-                            return text
-                except:
-                    pass
-                
-                # Fallback to OCR for image PDFs
-                try:
-                    images = pdf2image.convert_from_path(file_path)
-                    text = ""
-                    for image in images:
-                        text += pytesseract.image_to_string(image)
+                text = ResumeService._extract_text_from_pdf(file_content)
+                if len(text.strip()) > 100:
                     return text
-                except:
-                    return "Failed to extract text from PDF"
+                
+                # Fallback to OCR
+                return ResumeService._extract_text_with_ocr(file_content)
                 
             elif resume.file_type == 'docx':
-                if resume.file_url.startswith('http'):
-                    return f"DOCX from URL: {resume.file_url}"
+                return ResumeService._extract_text_from_docx(file_content)
                 
-                file_path = os.path.join(settings.UPLOAD_DIR, resume.file_url.replace("/uploads/", "", 1))
+            elif resume.file_type in ['jpg', 'jpeg', 'png']:
+                return ResumeService._extract_text_with_ocr(file_content)
                 
-                try:
-                    doc = Document(file_path)
-                    text = "\n".join([para.text for para in doc.paragraphs])
-                    return text
-                except:
-                    return "Failed to extract text from DOCX"
-            
             else:
-                return f"Unsupported file type: {resume.file_type}"
+                # Try UTF-8 decoding
+                try:
+                    return file_content.decode('utf-8')
+                except:
+                    return file_content.decode('latin-1')
                 
         except Exception as e:
             logger.error(f"Text extraction failed: {str(e)}")
             return f"Error extracting text: {str(e)}"
     
     @staticmethod
-    def _parse_resume_text(raw_text: str, filename: str) -> Dict[str, Any]:
-        """Parse resume text to extract structured data."""
-        # Mock parsing - in production, use LLM/ML models
-        
-        import random
-        from datetime import datetime
-        
-        # Extract email (simple regex)
-        import re
-        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', raw_text)
-        email = email_match.group(0) if email_match else f"candidate_{int(datetime.utcnow().timestamp())}@example.com"
-        
-        # Extract phone (simple regex)
-        phone_match = re.search(r'(\+\d{1,3}[-\.\s]?)?\(?\d{3}\)?[-\.\s]?\d{3}[-\.\s]?\d{4}', raw_text)
-        phone = phone_match.group(0) if phone_match else f"+1-555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
-        
-        # Mock data
-        parsed_data = {
-            "name": ResumeService._extract_name_from_filename(filename),
-            "email": email,
-            "phone": phone,
-            "experience": random.randint(1, 20),
-            "skills": random.sample([
-                "Python", "JavaScript", "React", "Node.js", "AWS", 
-                "Docker", "Kubernetes", "SQL", "MongoDB", "FastAPI",
-                "TypeScript", "GraphQL", "Redis", "PostgreSQL", "Git"
-            ], k=random.randint(3, 8)),
-            "current_company": random.choice([
-                "TechCorp Inc", "InnovateSoft", "DataSystems Ltd",
-                "CloudSolutions", "AI Research Lab", "StartupXYZ"
-            ]),
-            "education": random.choice([
-                "BSc Computer Science, University of Technology",
-                "MSc Software Engineering, State University",
-                "PhD Artificial Intelligence, Institute of Technology",
-                "BEng Computer Engineering, Engineering College"
-            ]),
-            "location": random.choice([
-                "San Francisco, CA", "New York, NY", "Remote",
-                "Austin, TX", "Seattle, WA", "Boston, MA"
-            ]),
-            "raw_extractions": {
-                "name": f"Extracted from filename: {filename}",
-                "email": email,
-                "phone": phone if phone_match else "Not found in text",
-                "experience": f"Estimated {random.randint(1, 20)} years based on content",
-                "skills": "Extracted from skills section",
-                "current_company": "Found in employment history",
-                "education": "Found in education section",
-                "location": "Found in contact information"
-            }
-        }
-        
-        return parsed_data
+    def _extract_text_from_pdf(file_content: bytes) -> str:
+        """Extract text from PDF"""
+        try:
+            pdf_reader = PyPDF2.PdfReader(BytesIO(file_content))
+            text = ""
+            
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            
+            return text
+            
+        except Exception as e:
+            logger.warning(f"PDF text extraction failed: {str(e)}")
+            return ""
     
     @staticmethod
-    def _update_candidate_from_parsed_data(
+    def _extract_text_with_ocr(file_content: bytes) -> str:
+        """Extract text using OCR"""
+        try:
+            # Convert to images
+            images = []
+            
+            if file_content.startswith(b'%PDF'):
+                # Convert PDF pages to images
+                images = convert_from_bytes(file_content, dpi=300)
+            else:
+                # Load single image
+                image = Image.open(BytesIO(file_content))
+                images = [image]
+            
+            # Perform OCR on each image
+            text = ""
+            for image in images:
+                # Preprocess image for better OCR
+                image = ResumeService._preprocess_image(image)
+                
+                # Perform OCR
+                page_text = pytesseract.image_to_string(
+                    image, 
+                    lang='+'.join(ResumeService.OCR_LANGUAGES)
+                )
+                text += page_text + "\n"
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"OCR failed: {str(e)}")
+            return ""
+    
+    @staticmethod
+    def _preprocess_image(image: Image.Image) -> Image.Image:
+        """Preprocess image for better OCR results"""
+        # Convert to grayscale
+        if image.mode != 'L':
+            image = image.convert('L')
+        
+        # Increase contrast
+        from PIL import ImageEnhance
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.0)
+        
+        # Apply threshold
+        image = image.point(lambda x: 0 if x < 128 else 255, '1')
+        
+        return image
+    
+    @staticmethod
+    def _extract_text_from_docx(file_content: bytes) -> str:
+        """Extract text from DOCX"""
+        try:
+            doc = Document(BytesIO(file_content))
+            text = ""
+            
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            
+            # Extract from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        text += cell.text + " "
+                    text += "\n"
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"DOCX extraction failed: {str(e)}")
+            return ""
+    
+    @staticmethod
+    def _save_to_storage(
+        file_content: bytes, 
+        resume_id: uuid.UUID, 
+        file_name: str,
+        file_type: str
+    ) -> str:
+        """Save file to storage"""
+        try:
+            # Create upload directory
+            upload_dir = os.path.join(settings.UPLOAD_DIR, str(resume_id))
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # Generate safe filename
+            safe_name = ResumeService._generate_safe_filename(file_name)
+            
+            # Save file
+            file_path = os.path.join(upload_dir, safe_name)
+            with open(file_path, 'wb') as f:
+                f.write(file_content)
+            
+            return f"/uploads/{resume_id}/{safe_name}"
+            
+        except Exception as e:
+            logger.error(f"Failed to save file: {str(e)}")
+            return None
+    
+    @staticmethod
+    def _generate_safe_filename(filename: str) -> str:
+        """Generate safe filename"""
+        import re
+        
+        # Remove path components
+        name = os.path.basename(filename)
+        
+        # Replace special characters
+        name = re.sub(r'[^\w\-_.]', '_', name)
+        
+        # Truncate if too long
+        if len(name) > 100:
+            name, ext = os.path.splitext(name)
+            name = name[:95] + ext
+        
+        # Add timestamp for uniqueness
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        name_without_ext, ext = os.path.splitext(name)
+        name = f"{name_without_ext}_{timestamp}{ext}"
+        
+        return name
+    
+    @staticmethod
+    def _contains_malicious_content(file_content: bytes) -> bool:
+        """Check for potentially malicious content"""
+        # Check for executable content
+        executable_signatures = [
+            b'MZ',  # Windows EXE
+            b'#!',  # Shell script
+            b'<?php',  # PHP
+            b'<script',  # JavaScript in HTML
+        ]
+        
+        for signature in executable_signatures:
+            if signature in file_content[:100]:
+                return True
+        
+        # Check for null bytes (common in binaries)
+        if b'\x00' in file_content[:1000]:
+            return True
+        
+        return False
+    
+    @staticmethod
+    def _update_candidate_with_parsed_data(
         db: Session,
         candidate: Candidate,
         parsed_data: Dict[str, Any],
         resume: Resume,
         reprocess: bool = False
     ):
-        """Update candidate with parsed data."""
-        # Update candidate fields
-        candidate.name = parsed_data["name"]
-        candidate.email = parsed_data["email"]
-        candidate.phone = parsed_data["phone"]
-        candidate.years_experience = parsed_data["experience"]
-        candidate.current_company = parsed_data["current_company"]
-        candidate.education = parsed_data["education"]
-        candidate.location = parsed_data["location"]
-        candidate.updated_at = datetime.utcnow()
-        
-        # Clear existing skills if reprocessing
+        """Update candidate with parsed data"""
+        # Clear existing data if reprocessing
         if reprocess:
             db.query(CandidateSkill).filter(
                 CandidateSkill.candidate_id == candidate.id
             ).delete()
-        
-        # Add/update skills
-        for skill in parsed_data["skills"]:
-            candidate_skill = CandidateSkill(
-                candidate_id=candidate.id,
-                skill=skill,
-                confidence=0.9  # Mock confidence
-            )
-            db.add(candidate_skill)
-        
-        # Clear existing parsed fields if reprocessing
-        if reprocess:
+            
             db.query(ParsedField).filter(
                 ParsedField.candidate_id == candidate.id
             ).delete()
         
-        # Add parsed fields
-        for field_name, value in parsed_data.items():
-            if field_name in ["raw_extractions", "skills"]:
-                continue
-                
+        # Update candidate fields
+        candidate.name = parsed_data.get('name', candidate.name)
+        candidate.email = parsed_data.get('email', candidate.email)
+        candidate.phone = parsed_data.get('phone', candidate.phone)
+        candidate.years_experience = parsed_data.get('years_experience', candidate.years_experience)
+        candidate.current_company = parsed_data.get('current_company', candidate.current_company)
+        candidate.education = parsed_data.get('education', candidate.education)
+        candidate.location = parsed_data.get('location', candidate.location)
+        candidate.updated_at = datetime.utcnow()
+        
+        # Update skills
+        skills = parsed_data.get('skills', [])
+        for skill in skills[:20]:  # Limit to 20 skills
+            candidate_skill = CandidateSkill(
+                candidate_id=candidate.id,
+                skill=skill,
+                confidence=parsed_data.get('confidence_scores', {}).get('skills', 0.7)
+            )
+            db.add(candidate_skill)
+        
+        # Create parsed fields
+        for field_name in ['name', 'email', 'phone', 'years_experience', 
+                          'current_company', 'education', 'location']:
+            value = parsed_data.get(field_name)
+            if value:
+                parsed_field = ParsedField(
+                    candidate_id=candidate.id,
+                    name=field_name,
+                    value=str(value),
+                    confidence=parsed_data.get('confidence_scores', {}).get(field_name, 0.8) * 100,
+                    raw_extraction=str(value),
+                    source="ai_parsing"
+                )
+                db.add(parsed_field)
+        
+        # Add skills as parsed field
+        if skills:
             parsed_field = ParsedField(
                 candidate_id=candidate.id,
-                name=field_name,
-                value=str(value),
-                confidence=85.0,  # Mock confidence
-                raw_extraction=parsed_data["raw_extractions"].get(field_name, ""),
-                source="resume"
+                name='skills',
+                value=','.join(skills[:10]),
+                confidence=parsed_data.get('confidence_scores', {}).get('skills', 0.7) * 100,
+                raw_extraction=','.join(skills[:10]),
+                source="ai_parsing"
             )
             db.add(parsed_field)
         
@@ -571,32 +657,41 @@ class ResumeService:
         if not candidate.conversation_state or reprocess:
             candidate.conversation_state = ResumeService._create_conversation_state(parsed_data)
         
-        # Update overall confidence
-        candidate.overall_confidence = ResumeService._calculate_parsed_confidence(parsed_data)
+        # Calculate overall confidence
+        confidence_scores = parsed_data.get('confidence_scores', {})
+        if confidence_scores:
+            avg_confidence = sum(confidence_scores.values()) / len(confidence_scores)
+            candidate.overall_confidence = avg_confidence * 100
+        else:
+            candidate.overall_confidence = ResumeService._calculate_completeness_score(parsed_data)
     
     @staticmethod
     def _create_conversation_state(parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create conversation state from parsed data."""
+        """Create conversation state from parsed data"""
         fields = {}
         
         field_mapping = {
             "name": "name",
             "email": "email", 
             "phone": "phone",
-            "experience": "experience",
+            "years_experience": "experience",
             "current_company": "currentCompany",
             "education": "education",
             "location": "location"
         }
         
+        confidence_scores = parsed_data.get('confidence_scores', {})
+        
         for parse_key, field_key in field_mapping.items():
             value = parsed_data.get(parse_key)
+            confidence = confidence_scores.get(parse_key, 0.0)
+            
             if value:
                 fields[field_key] = {
                     "value": value,
-                    "confidence": 0.8 if parse_key in ["name", "email"] else 0.7,
+                    "confidence": confidence,
                     "asked": False,
-                    "answered": True,
+                    "answered": confidence > 0.5,
                     "source": "resume"
                 }
             else:
@@ -609,28 +704,65 @@ class ResumeService:
                 }
         
         # Handle skills separately
-        skills = parsed_data.get("skills", [])
+        skills = parsed_data.get('skills', [])
+        skills_confidence = confidence_scores.get('skills', 0.0)
+        
         fields["skills"] = {
             "value": skills,
-            "confidence": 0.9 if skills else 0.0,
+            "confidence": skills_confidence,
             "asked": False,
-            "answered": bool(skills),
+            "answered": bool(skills) and skills_confidence > 0.5,
             "source": "resume" if skills else None
         }
         
         return {"fields": fields}
     
     @staticmethod
-    def _calculate_parsed_confidence(parsed_data: Dict[str, Any]) -> float:
-        """Calculate confidence score for parsed data."""
-        required_fields = ["name", "email", "experience", "skills", "education"]
-        filled_fields = sum(1 for field in required_fields if parsed_data.get(field))
+    def _calculate_completeness_score(parsed_data: Dict[str, Any]) -> float:
+        """Calculate completeness score for parsed data"""
+        required_fields = ['name', 'email', 'skills', 'years_experience']
+        optional_fields = ['phone', 'current_company', 'education', 'location']
         
-        optional_fields = ["phone", "current_company", "location"]
+        filled_required = sum(1 for field in required_fields if parsed_data.get(field))
         filled_optional = sum(1 for field in optional_fields if parsed_data.get(field))
         
-        # Weight required fields more heavily
-        total_score = (filled_fields * 1.5) + filled_optional
+        total_score = (filled_required * 1.5) + filled_optional
         max_score = (len(required_fields) * 1.5) + len(optional_fields)
         
-        return (total_score / max_score * 100) if max_score > 0 else 0
+        return (total_score / max_score * 100) if max_score > 0 else 0.0
+    
+    @staticmethod
+    def get_resume_quality_metrics(resume: Resume) -> Dict[str, Any]:
+        """Get quality metrics for a resume"""
+        if not resume.raw_text:
+            return {"error": "Resume not parsed yet"}
+        
+        text = resume.raw_text
+        
+        metrics = {
+            "text_length": len(text),
+            "word_count": len(text.split()),
+            "char_count": len(text),
+            "line_count": text.count('\n') + 1,
+            "avg_word_length": sum(len(word) for word in text.split()) / max(len(text.split()), 1),
+            "parsed_at": resume.parsed_at.isoformat() if resume.parsed_at else None,
+            "file_size": os.path.getsize(
+                os.path.join(settings.UPLOAD_DIR, resume.file_url.replace("/uploads/", "", 1))
+            ) if not resume.file_url.startswith('http') else None
+        }
+        
+        # Calculate readability (simple version)
+        sentences = [s.strip() for s in text.split('.') if s.strip()]
+        if sentences:
+            avg_sentence_length = sum(len(s.split()) for s in sentences) / len(sentences)
+            metrics["avg_sentence_length"] = avg_sentence_length
+            
+            # Simple readability score
+            if avg_sentence_length < 15:
+                metrics["readability"] = "high"
+            elif avg_sentence_length < 25:
+                metrics["readability"] = "medium"
+            else:
+                metrics["readability"] = "low"
+        
+        return metrics

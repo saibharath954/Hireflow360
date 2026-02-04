@@ -118,32 +118,32 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <StatCard
             title="Total Candidates"
-            value={stats.totalCandidates}
+            value={stats.total_candidates}
             icon={Users}
           />
           <StatCard
             title="Resumes Processed"
-            value={stats.resumesProcessed}
+            value={stats.resumes_processed}
             icon={FileText}
           />
           <StatCard
             title="Messages Sent"
-            value={stats.messagesSent}
+            value={stats.messages_sent}
             icon={Mail}
           />
           <StatCard
             title="Replies Received"
-            value={stats.repliesReceived}
+            value={stats.replies_received}
             icon={MessageSquare}
           />
           <StatCard
             title="Pending Jobs"
-            value={stats.pendingJobs}
+            value={stats.pending_jobs}
             icon={Briefcase}
           />
           <StatCard
             title="Interested"
-            value={stats.interestedCandidates}
+            value={stats.interested_candidates}
             icon={UserCheck}
           />
         </div>

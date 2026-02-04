@@ -1,7 +1,4 @@
-/**
- * Production Authentication Context
- * Integrated with existing API service
- */
+// Remove the problematic interval and fix the validateToken bug
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { api } from "@/services/api";
@@ -50,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         if (accessToken && userData) {
           // Validate token with backend
-          const isValid = await validateToken(accessToken);
+          const isValid = await validateToken();
           
           if (isValid) {
             setUser(JSON.parse(userData));
@@ -73,37 +70,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initAuth();
   }, []);
 
-  // Auto-refresh token before expiration
+  // Check token when user changes, but NO interval
   useEffect(() => {
     if (!user) return;
 
-    const checkAndRefreshToken = async () => {
-      const expiryTime = localStorage.getItem(TOKEN_KEYS.TOKEN_EXPIRY);
-      if (!expiryTime) return;
+    const expiryTime = localStorage.getItem(TOKEN_KEYS.TOKEN_EXPIRY);
+    if (!expiryTime) return;
 
-      const expiry = parseInt(expiryTime);
-      const now = Date.now();
-      const fiveMinutes = 5 * 60 * 1000;
+    const expiry = parseInt(expiryTime);
+    const now = Date.now();
+    const fiveMinutes = 5 * 60 * 1000;
 
-      // Refresh if token expires in less than 5 minutes
-      if (expiry - now < fiveMinutes) {
-        await attemptTokenRefresh();
-      }
-    };
-
-    // Check every minute
-    const interval = setInterval(checkAndRefreshToken, 60000);
-    return () => clearInterval(interval);
+    // Refresh only if token is about to expire (once, not on interval)
+    if (expiry - now < fiveMinutes) {
+      attemptTokenRefresh();
+    }
   }, [user]);
 
   // Validate token with backend
-  const validateToken = async (token: string): Promise<boolean> => {
+  const validateToken = async (): Promise<boolean> => {
     try {
-      // Use your existing API service
-      localStorage.setItem(TOKEN_KEYS.ACCESS_TOKEN, token);
-      const response = await api.auth.refreshToken();
+      // Use validate-token endpoint
+      const response = await api.auth.validateToken();
       return response.success;
     } catch (error) {
+      console.error("Token validation failed:", error);
       return false;
     }
   };
@@ -146,11 +137,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Fetch user profile using existing API
   const fetchUserProfile = async () => {
-    const userData = localStorage.getItem(TOKEN_KEYS.USER_DATA);
-    if (userData) {
-      return { success: true, data: JSON.parse(userData) };
+    try {
+      const response = await api.auth.getProfile();
+      return response;
+    } catch (error) {
+      console.error("Failed to fetch user profile:", error);
+      return { success: false, error: "Failed to fetch user profile" };
     }
-    return { success: false, error: "No user data found" };
   };
 
   // Clear all auth data

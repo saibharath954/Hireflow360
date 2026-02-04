@@ -156,6 +156,10 @@ class MessageBase(BaseSchema):
     timestamp: datetime
     status: str
 
+class SendMessageRequest(BaseSchema):
+    content: str
+    asked_fields: List[str] = []
+
 class MessageCreate(BaseSchema):
     candidate_id: uuid.UUID
     content: str
@@ -177,7 +181,7 @@ class Message(MessageBase):
     generated_by: Optional[str] = None
     classification: Optional[str] = None
     suggested_reply: Optional[str] = None
-    extracted_fields: Optional[List[ParsedField]] = None
+    extracted_fields: Dict[str, Any] = {}
     requires_hr_review: Optional[bool] = False
     ai_suggested_reply: Optional[str] = None
     hr_approved: Optional[bool] = False

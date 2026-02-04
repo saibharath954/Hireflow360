@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     LOG_BACKUP_COUNT: int = 5
     LOG_FORMAT: str = "text" 
 
-
     # API
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "AI Resume Intake & HR Platform"
@@ -45,6 +44,8 @@ class Settings(BaseSettings):
     # File upload
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
+
+    OPENAI_API_KEY: Optional[str] = None
     
     # Mock mode
     MOCK_MODE: bool = True

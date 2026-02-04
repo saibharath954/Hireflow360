@@ -3,7 +3,7 @@
  * Provides real API calls with error handling
  */
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useToastContext } from "@/contexts/ToastContext";
 import { api } from "@/services/api";
 import type {
@@ -306,17 +306,14 @@ export function useApi() {
         const response = await api.messaging.getConversation(candidateId, limit);
         if (response.success && response.data) {
           return response.data;
-        } else {
-          return handleApiError(response.error, "Failed to load conversation") || [];
         }
+        return [];
       } catch (error) {
-        return handleApiError(
-          error instanceof Error ? error.message : "Network error",
-          "Failed to load conversation"
-        ) || [];
+        console.error('Failed to fetch conversation:', error);
+        return [];
       }
     },
-    [handleApiError]
+    [] // Empty dependency array - function never changes
   );
 
   const getPendingReviews = useCallback(
@@ -474,7 +471,8 @@ export function useApi() {
     [handleApiError]
   );
 
-  return {
+  // FINAL RETURN: Wrap in useMemo
+  return useMemo(() => ({
     // Candidates
     getCandidates,
     getCandidate,
@@ -510,5 +508,14 @@ export function useApi() {
     
     // Jobs
     getJobs,
-  };
+  }), [
+    // List all dependencies here (basically all the functions above)
+    getCandidates, getCandidate, updateCandidate, createCandidate, deleteCandidate,
+    uploadResume, getResume, reprocessResume, deleteResume,
+    generateMessagePreview, sendMessage, simulateReply, approveAndSendMessage, getConversation, getPendingReviews,
+    getDashboardStats, getRecentActivity,
+    exportCandidates, syncGoogleSheets,
+    getSettings, updateSettings,
+    getJobs
+  ]);
 }

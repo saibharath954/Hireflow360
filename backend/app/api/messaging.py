@@ -1,5 +1,5 @@
 # backend/app/api/messaging.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from typing import List, Optional
 import uuid
 from datetime import datetime
@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_recruiter_user
 from app.schemas.schemas import (
     ApiResponse, Message, MessagePreview, MessageCreate,
-    ReplyCreate, CandidateFieldKey
+    ReplyCreate, CandidateFieldKey, SendMessageRequest
 )
 from app.models.models import (
     User, Candidate, Message as MessageModel,
@@ -18,6 +18,35 @@ from app.models.models import (
 from app.services.messaging_service import MessagingService
 
 router = APIRouter()
+
+@router.get("/conversation", response_model=ApiResponse)
+async def get_conversation(
+    candidate_id: str = Query(...),
+    limit: int = Query(50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_recruiter_user)
+):
+    candidate = db.query(Candidate).filter(
+        Candidate.id == candidate_id,
+        Candidate.organization_id == current_user.organization_id
+    ).first()
+
+    if not candidate:
+        return ApiResponse(success=False, error="Candidate not found")
+
+    messages = (
+        db.query(MessageModel)
+        .filter(MessageModel.candidate_id == candidate_id)
+        .order_by(MessageModel.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return ApiResponse(
+        success=True,
+        data=[Message.from_orm(m) for m in messages]
+    )
+
 
 @router.post("/generate-preview", response_model=ApiResponse)
 async def generate_message_preview(
@@ -86,10 +115,9 @@ async def generate_message_preview(
 
 @router.post("/send", response_model=ApiResponse)
 async def send_message(
-    candidate_id: str,
-    content: str,
-    mode: str = "mock",
-    asked_fields: Optional[List[str]] = None,
+    candidate_id: str = Query(...),
+    mode: str = Query("mock"),
+    payload: SendMessageRequest = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_recruiter_user)
 ):
@@ -107,11 +135,11 @@ async def send_message(
         id=str(uuid.uuid4()),
         candidate_id=candidate_id,
         direction="outgoing",
-        content=content,
+        content=payload.content,
         timestamp=datetime.utcnow(),
         status="sent" if mode == "mock" else "pending",
         generated_by="ai",
-        asked_fields=asked_fields
+        asked_fields=payload.asked_fields
     )
     
     db.add(message)
@@ -122,8 +150,8 @@ async def send_message(
     candidate.updated_at = datetime.utcnow()
     
     # Update conversation state if asked_fields provided
-    if asked_fields and candidate.conversation_state:
-        for field in asked_fields:
+    if payload.asked_fields and candidate.conversation_state:
+        for field in payload.asked_fields:
             if field in candidate.conversation_state.get("fields", {}):
                 candidate.conversation_state["fields"][field]["asked"] = True
     
@@ -137,7 +165,7 @@ async def send_message(
             message_id=message.id,
             job_metadata={
                 "mode": mode,
-                "content": content[:100]  # Store first 100 chars
+                "content": payload.content[:100]  # Store first 100 chars
             },
             created_at=datetime.utcnow()
         )

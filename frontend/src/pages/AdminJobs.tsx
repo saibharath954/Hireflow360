@@ -24,9 +24,8 @@ export default function AdminJobs() {
   useEffect(() => {
     const load = async () => { setJobs(await getJobs()); setIsLoading(false); };
     load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [getJobs]);
+    return () => {};
+  }, []);
 
   if (isLoading) return <div className="flex justify-center h-64"><LoadingSpinner size="lg" /></div>;
 

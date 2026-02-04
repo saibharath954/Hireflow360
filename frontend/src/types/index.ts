@@ -144,11 +144,14 @@ export type CandidateFieldKey =
   | "name"
   | "email"
   | "phone"
-  | "experience"
+  | "years_experience"
   | "skills"
-  | "currentCompany"
+  | "current_company"
   | "education"
-  | "location";
+  | "location"
+  | "portfolio_url"
+  | "notice_period"
+  | "expected_salary";
 
 export interface FieldState {
   value?: string | string[] | number | null;
@@ -172,6 +175,15 @@ export interface ParsedField {
 }
 
 // Resume
+export interface ResumeUploadResult {
+  resumeId: string;
+  candidateName: string;
+  jobId?: string;
+  status: "uploaded" | "processing" | "parsed" | "failed";
+  uploadedAt: string;
+}
+
+
 export interface Resume {
   id: string;
   candidateId: string;
@@ -289,12 +301,12 @@ export interface AppSettings {
 
 // Dashboard
 export interface DashboardStats {
-  totalCandidates: number;
-  resumesProcessed: number;
-  messagesSent: number;
-  repliesReceived: number;
-  pendingJobs: number;
-  interestedCandidates: number;
+  total_candidates: number;
+  resumes_processed: number;
+  messages_sent: number;
+  replies_received: number;
+  pending_jobs: number;
+  interested_candidates: number;
 }
 
 export interface ActivityItem {

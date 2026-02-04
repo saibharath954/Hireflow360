@@ -17,20 +17,23 @@ const FIELD_LABELS: Record<CandidateFieldKey, string> = {
   name: "Full Name",
   email: "Email Address",
   phone: "Phone Number",
-  experience: "Years of Experience",
+  years_experience: "Years of Experience",
   skills: "Technical Skills",
-  currentCompany: "Current Company",
+  current_company: "Current Company",
   education: "Education",
   location: "Location",
+  portfolio_url: "Portfolio URL",
+  notice_period: "Notice Period",
+  expected_salary: "Expected Salary",
 };
 
 const FIELD_ORDER: CandidateFieldKey[] = [
   "name",
   "email",
   "phone",
-  "experience",
+  "years_experience",
   "skills",
-  "currentCompany",
+  "current_company",
   "education",
   "location",
 ];
@@ -225,11 +228,14 @@ export function deriveConversationState(
     name: "name",
     email: "email",
     phone: "phone",
-    experience: "years_experience",
+    years_experience: "years_experience",
     skills: "skills",
-    currentCompany: "current_company",
+    current_company: "current_company",
     education: "education",
     location: "location",
+    portfolio_url: "portfolio_url",
+    notice_period: "notice_period",
+    expected_salary: "expected_salary",
   };
 
   // Initialize all fields
@@ -237,11 +243,14 @@ export function deriveConversationState(
     name: { confidence: 0, asked: false, answered: false },
     email: { confidence: 0, asked: false, answered: false },
     phone: { confidence: 0, asked: false, answered: false },
-    experience: { confidence: 0, asked: false, answered: false },
+    years_experience: { confidence: 0, asked: false, answered: false },
     skills: { confidence: 0, asked: false, answered: false },
-    currentCompany: { confidence: 0, asked: false, answered: false },
+    current_company: { confidence: 0, asked: false, answered: false },
     education: { confidence: 0, asked: false, answered: false },
     location: { confidence: 0, asked: false, answered: false },
+    portfolio_url: { confidence: 0, asked: false, answered: false },
+    notice_period: { confidence: 0, asked: false, answered: false },
+    expected_salary: { confidence: 0, asked: false, answered: false },
   };
 
   // Populate from candidate top-level fields
@@ -249,11 +258,14 @@ export function deriveConversationState(
     name: candidate.name,
     email: candidate.email,
     phone: candidate.phone,
-    experience: candidate.yearsExperience,
+    years_experience: candidate.yearsExperience,
     skills: candidate.skills,
-    currentCompany: candidate.currentCompany,
+    current_company: candidate.currentCompany,
     education: candidate.education,
     location: candidate.location,
+    portfolio_url: undefined,
+    notice_period: undefined,
+    expected_salary: undefined,
   };
 
   // Get confidence from parsed fields
@@ -297,21 +309,24 @@ export function deriveConversationState(
 
     // Check extracted fields from replies
     if (msg.direction === "incoming" && msg.extractedFields) {
-      msg.extractedFields.forEach((ef) => {
-        const fieldKey = (Object.entries(fieldMapping).find(
-          ([, v]) => v === ef.name
-        )?.[0] || "") as CandidateFieldKey;
+      Object.entries(msg.extractedFields).forEach(
+        ([parsedName, ef]: [string, any]) => {
 
-        if (fieldKey && fields[fieldKey]) {
-          fields[fieldKey] = {
-            value: ef.value as FieldState["value"],
-            confidence: ef.confidence / 100,
-            asked: false,
-            answered: true,
-            source: "reply",
-          };
+          const fieldKey = (Object.entries(fieldMapping).find(
+            ([, v]) => v === parsedName
+          )?.[0] || "") as CandidateFieldKey;
+
+          if (fieldKey && fields[fieldKey]) {
+            fields[fieldKey] = {
+              value: ef.value as FieldState["value"],
+              confidence: (ef.confidence ?? 50) / 100,
+              asked: false,
+              answered: true,
+              source: "reply",
+            };
+          }
         }
-      });
+      );
     }
   });
 

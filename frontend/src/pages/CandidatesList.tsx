@@ -1,8 +1,3 @@
-/**
- * Candidates List Page
- * Main table with search, filters, and candidate overview
- */
-
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -33,7 +28,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
 import { TagList } from "@/components/ui/TagList";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { BadgeConfidence } from "@/components/ui/BadgeConfidence";
@@ -42,7 +36,7 @@ import { useApi } from "@/hooks/useApi";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useToastContext } from "@/contexts/ToastContext";
 import { exportAndDownload } from "@/services/excelService";
-import type { Candidate, CandidateFilters, PaginatedResponse } from "@/types";
+import type { Candidate, CandidateFilters } from "@/types";
 import type { CandidateStatus } from "@/styles/design-tokens";
 
 const statusOptions: { value: CandidateStatus; label: string }[] = [
@@ -90,29 +84,50 @@ export default function CandidatesList() {
   );
 
   const loadCandidates = useCallback(async () => {
+    // Prevent loading if we are already in a "loading" state to debounce double-fires
+    // Note: We handle the actual fetch inside.
+    
     setIsLoading(true);
     try {
+      // Pass the current state values directly to ensure we use latest data
       const data = await getCandidates(filters, pagination.page, pagination.pageSize);
+      
       if (data) {
-        setCandidates(data.items);
-        setPagination({
+        setCandidates(data.items || []);
+        setPagination((prev) => ({
+          ...prev,
           page: data.page,
           pageSize: data.pageSize,
           total: data.total,
           hasMore: data.hasMore,
-        });
+        }));
       }
     } catch (error) {
       console.error("Failed to load candidates:", error);
-      toast.error("Error", "Failed to load candidates");
+      // Toast is already handled in useApi, no need to duplicate
     } finally {
       setIsLoading(false);
     }
-  }, [getCandidates, filters, pagination.page, pagination.pageSize, toast]);
+  }, [getCandidates, filters, pagination.page, pagination.pageSize]);
 
+  // FIX: Separate the Effect from the Function Identity
+  // We only want to re-run this when the *DATA* requirements change,
+  // not when the function reference changes (which happens on every toast error).
   useEffect(() => {
-    loadCandidates();
-  }, [loadCandidates]);
+    let isMounted = true;
+
+    const fetchData = async () => {
+      if (!isMounted) return;
+      await loadCandidates();
+    };
+
+    fetchData();
+
+    return () => { isMounted = false; };
+    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagination.page, pagination.pageSize, filters]); 
+  // ^ REMOVED 'loadCandidates' from dependencies to stop the loop.
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -184,7 +199,7 @@ export default function CandidatesList() {
           />
         </div>
 
-        {/* Status filter */}
+        {/* Status Filter */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">
@@ -213,7 +228,7 @@ export default function CandidatesList() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Skills filter */}
+        {/* Skills Filter */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">
@@ -249,7 +264,7 @@ export default function CandidatesList() {
       </div>
 
       {/* Table */}
-      {isLoading ? (
+      {isLoading && candidates.length === 0 ? (
         <div className="flex items-center justify-center h-64">
           <LoadingSpinner size="lg" text="Loading candidates..." />
         </div>
