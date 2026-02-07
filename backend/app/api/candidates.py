@@ -46,7 +46,8 @@ async def get_candidates(
             filters=filters,
             page=page,
             page_size=page_size,
-            owner_id=current_user.id if current_user.role == "RECRUITER" else None,
+            # owner_id=current_user.id if current_user.role == "RECRUITER" else None,
+            owner_id=None,
             sort_by=sort_by,
             sort_order=sort_order
         )

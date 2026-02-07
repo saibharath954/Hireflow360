@@ -43,7 +43,7 @@ def mock_celery_task(func):
 
 @mock_celery_task
 def process_resume_upload(resume_id: str, candidate_id: str, job_id: str, reprocess: bool = False):
-    """Background job to process resume upload"""
+    """Background job to process resume upload with real parsing"""
     db = SessionLocal()
     try:
         # Get job
@@ -57,98 +57,21 @@ def process_resume_upload(resume_id: str, candidate_id: str, job_id: str, reproc
         job.progress = 10
         db.commit()
         
-        # Get resume
-        resume = db.query(Resume).filter(Resume.id == resume_id).first()
-        if not resume:
+        # Call the real parsing service
+        from app.services.resume_service import ResumeService
+        
+        success = ResumeService.parse_resume_content(
+            resume_id=uuid.UUID(resume_id),
+            candidate_id=uuid.UUID(candidate_id),
+            job_id=uuid.UUID(job_id),
+            reprocess=reprocess
+        )
+        
+        if not success:
             job.status = JobStatus.FAILED
-            job.error = "Resume not found"
             job.completed_at = datetime.utcnow()
             db.commit()
-            return
-        
-        # Simulate OCR and parsing delay
-        time.sleep(1)
-        job.progress = 30
-        db.commit()
-        
-        # ---------------------------------------------------------
-        # AI/LLM Integration Point
-        # ---------------------------------------------------------
-        try:
-            from app.services.ai_service import AIService
-            # Using mock data for robustness if service call fails or isn't configured
-            raise ImportError("Using mock data for speed")
-        except Exception:
-            # Fallback Mock Data
-            parsed_data = {
-                "name": resume.file_name.replace(".pdf", "").replace(".docx", "").replace("_", " ").title(),
-                "email": f"candidate_{int(time.time())}@example.com",
-                "phone": f"+1-555-{random.randint(100, 999)}-{random.randint(1000, 9999)}",
-                "experience": random.randint(1, 15),
-                "skills": ["Python", "JavaScript", "React", "FastAPI", "PostgreSQL"],
-                "current_company": f"Tech Company {random.choice(['Inc', 'Corp', 'Ltd'])}",
-                "education": f"{random.choice(['BSc', 'MSc', 'PhD'])} in Computer Science",
-                "location": f"{random.choice(['San Francisco', 'New York', 'Remote'])}",
-            }
-        
-        job.progress = 60
-        db.commit()
-
-        # Get candidate
-        candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
-        if candidate:
-            # Update candidate details
-            candidate.name = parsed_data.get("name", candidate.name)
-            candidate.email = parsed_data.get("email", candidate.email)
-            candidate.phone = parsed_data.get("phone", candidate.phone)
-            candidate.years_experience = parsed_data.get("experience")
-            candidate.current_company = parsed_data.get("current_company")
-            candidate.education = parsed_data.get("education")
-            candidate.location = parsed_data.get("location")
-            candidate.overall_confidence = 75.0
             
-            # Clear and re-add skills
-            db.query(CandidateSkill).filter(CandidateSkill.candidate_id == candidate_id).delete()
-            for skill in parsed_data.get("skills", []):
-                db.add(CandidateSkill(candidate_id=candidate_id, skill=skill, confidence=0.9))
-            
-            # Clear and re-add parsed fields
-            db.query(ParsedField).filter(ParsedField.candidate_id == candidate_id).delete()
-            for field_name, value in parsed_data.items():
-                if field_name != "skills":
-                    db.add(ParsedField(
-                        candidate_id=candidate_id,
-                        name=field_name,
-                        value=str(value),
-                        confidence=85.0,
-                        raw_extraction=str(value),
-                        source="resume"
-                    ))
-            
-            # Initialize conversation state
-            if not candidate.conversation_state:
-                candidate.conversation_state = {
-                    "fields": {
-                        "name": {"value": parsed_data.get("name"), "confidence": 0.9, "asked": False, "answered": True},
-                        "email": {"value": parsed_data.get("email"), "confidence": 0.9, "asked": False, "answered": True},
-                        "experience": {"value": parsed_data.get("experience"), "confidence": 0.8, "asked": False, "answered": True},
-                        "skills": {"value": parsed_data.get("skills"), "confidence": 0.9, "asked": False, "answered": True},
-                        "location": {"value": parsed_data.get("location"), "confidence": 0.7, "asked": False, "answered": False},
-                    }
-                }
-            
-            candidate.updated_at = datetime.utcnow()
-        
-        # Update resume meta
-        resume.parsed_at = datetime.utcnow()
-        resume.raw_text = f"Mock raw text from {resume.file_name}"
-        
-        # Complete job
-        job.status = JobStatus.COMPLETED
-        job.progress = 100
-        job.completed_at = datetime.utcnow()
-        db.commit()
-        
     except Exception as e:
         if 'job' in locals() and job:
             job.status = JobStatus.FAILED

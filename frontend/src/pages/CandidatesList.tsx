@@ -324,7 +324,7 @@ export default function CandidatesList() {
                   </TableCell>
                   <TableCell>
                     {candidate.yearsExperience !== undefined
-                      ? `${candidate.yearsExperience} years`
+                      ? `${candidate.yearsExperience || 0} years`
                       : "—"}
                   </TableCell>
                   <TableCell className="hidden md:table-cell">

@@ -28,8 +28,7 @@ class UserBase(BaseSchema):
     organization_id: uuid.UUID
     organization_name: str
     role: str
-    avatar_url: Optional[str] = None
-
+    
 class User(UserBase):
     id: uuid.UUID
 

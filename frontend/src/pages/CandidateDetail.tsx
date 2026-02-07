@@ -280,9 +280,9 @@ export default function CandidateDetail() {
         )}
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6">
+      <div className="grid lg:grid-cols-2 gap-6">
         {/* Left: Parsed Fields */}
-        <div className="space-y-4">
+        {/* <div className="space-y-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
@@ -315,7 +315,7 @@ export default function CandidateDetail() {
               )}
             </CardContent>
           </Card>
-        </div>
+        </div> */}
 
         {/* Middle: Conversation Checklist */}
         <div className="space-y-4">

@@ -310,7 +310,7 @@ async def login(
         )
         
         # Update last login time
-        user.last_login_at = datetime.utcnow()
+        user.last_login = datetime.utcnow()
         db.commit()
         
         # Log successful login attempt
@@ -346,9 +346,8 @@ async def login(
             organization_id=str(user.organization_id),
             organization_name=user.organization.name,
             role=user.role,
-            avatar_url=user.avatar_url,
             is_active=user.is_active,
-            last_login_at=user.last_login_at
+            last_login=user.last_login
         )
         
         response_data = {
@@ -591,9 +590,8 @@ async def read_users_me(
         organization_id=str(current_user.organization_id),
         organization_name=current_user.organization.name,
         role=current_user.role,
-        avatar_url=current_user.avatar_url,
         is_active=current_user.is_active,
-        last_login_at=current_user.last_login_at
+        last_login=current_user.last_login
     )
     
     return ApiResponse(
@@ -695,9 +693,8 @@ async def register_user(
         organization_id=str(user.organization_id),
         organization_name=organization.name,
         role=user.role,
-        avatar_url=user.avatar_url,
         is_active=user.is_active,
-        last_login_at=user.last_login_at
+        last_login=user.last_login
     )
     
     return ApiResponse(
